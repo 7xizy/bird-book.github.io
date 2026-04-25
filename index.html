@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🦜 鳥類圖鑑｜API Key + OAuth 雙模式</title>
+  <title>🦜 鳥類圖鑑｜OAuth + API Key 雙模式</title>
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
@@ -92,7 +92,7 @@
   <button class="btn" onclick="toggleSidebar()">☰</button>
 </div>
 
-<div class="modal" id="settingsModal" style="display:none;">
+<div class="modal" id="settingsModal" style="display:none;" onclick="if(event.target===this) this.style.display='none'">
   <div class="modal-box">
     <h3>🔑 連線設定</h3>
     <details open>
@@ -190,7 +190,7 @@
   };
 
   const localFileStore = new Map();
-  const STORAGE_KEY = 'birdGuide_combined_v1';
+  const STORAGE_KEY = 'birdGuide_combined_v2';
 
   // ---------- localStorage ----------
   function save() {
@@ -220,6 +220,18 @@
     }
   }
 
+  // ---------- 全域函式 (修正按鈕無反應) ----------
+  window.openSettings = function() {
+    document.getElementById('apiKeyInput').value = state.apiKey;
+    document.getElementById('driveFolderIdInput').value = state.driveFolderId;
+    document.getElementById('clientIdInput').value = localStorage.getItem('birdClientId') || '';
+    document.getElementById('settingsModal').style.display = 'flex';
+  };
+
+  window.toggleSidebar = function() {
+    document.getElementById('sidebar').classList.toggle('collapsed');
+  };
+
   // ---------- OAuth 部分 ----------
   let clientId = localStorage.getItem('birdClientId') || '';
   let tokenClient;
@@ -244,7 +256,7 @@
     });
   }
 
-  window.handleAuthClick = () => {
+  window.handleAuthClick = function() {
     if (!clientId) { alert('請先到設定中儲存 OAuth 2.0 用戶端 ID'); return; }
     if (!tokenClient) initOAuth();
     if (state.accessToken) {
@@ -281,17 +293,17 @@
     }
   }
 
-  window.saveClientId = () => {
+  window.saveClientId = function() {
     clientId = document.getElementById('clientIdInput').value.trim();
     if (!clientId) { alert('請輸入用戶端 ID'); return; }
     localStorage.setItem('birdClientId', clientId);
     initOAuth();
     updateLoginUI();
-    alert('Client ID 已儲存。');
+    alert('Client ID 已儲存。現在可以點擊「登入 Google」進行授權。');
   };
 
   // ---------- API Key 讀取 ----------
-  window.loadFromApiKey = async () => {
+  window.loadFromApiKey = async function() {
     let key = document.getElementById('apiKeyInput').value.trim();
     let folder = document.getElementById('driveFolderIdInput').value.trim();
     if (!key || !folder) { alert('請輸入 API Key 與資料夾 ID'); return; }
@@ -451,7 +463,23 @@
     } catch(e) { alert('建立失敗：'+e.message); }
   };
 
-  // ---------- 其他功能（搜尋、詳情、多選等）保持與前版相同 ----------
+  async function movePhotoToCategory(photoId, targetCat) {
+    let photo = state.photos.find(p=>p.id===photoId);
+    if(!photo || !state.accessToken) return;
+    let oldCat = photo.category;
+    if(oldCat === targetCat) return;
+    if(photo.driveFileId){
+      try{
+        let fromId = oldCat==='uncategorized'? await ensureRootFolder() : state.customCategories.find(c=>c.name===oldCat)?.driveFolderId;
+        let toId = targetCat==='uncategorized'? await ensureRootFolder() : state.customCategories.find(c=>c.name===targetCat)?.driveFolderId;
+        if(toId) await oauthDriveRequest(`https://www.googleapis.com/drive/v3/files/${photo.driveFileId}?addParents=${toId}&removeParents=${fromId||''}`, {method:'PATCH'});
+      }catch(e){ alert('雲端移動失敗：'+e.message); return; }
+    }
+    photo.category = targetCat;
+    save(); renderAll();
+  }
+
+  // ---------- 搜尋 / 網格 ----------
   function getFilteredPhotos() {
     let q = document.getElementById('searchInput').value.trim();
     let arr = [...state.photos];
@@ -466,7 +494,7 @@
         let s=new Date(range[1]), e=new Date(range[3]);
         if(!isNaN(s)&&!isNaN(e)) arr = arr.filter(p=>{ let d=getPhotoDate(p); return d>=s&&d<=e; });
       } else if(/^\d{4}$/.test(q)) {
-        let y=parseInt(q);
+        let y = parseInt(q);
         arr = arr.filter(p=>getPhotoDate(p).getFullYear()===y);
       } else if(/^(\d{4})-(\d{2})$/.test(q)) {
         let m=q.match(/^(\d{4})-(\d{2})$/), year=parseInt(m[1]), month=parseInt(m[2]);
@@ -476,7 +504,7 @@
         arr = arr.filter(p=>p.name.toLowerCase().includes(lq)||(p.exif?.Model||'').toLowerCase().includes(lq)||(p.exif?.LensModel||'').toLowerCase().includes(lq));
       }
     }
-    let sort=document.getElementById('sortSelect').value;
+    let sort = document.getElementById('sortSelect').value;
     if(sort==='date-desc') arr.sort((a,b)=>new Date(b.dateAdded)-new Date(a.dateAdded));
     else if(sort==='date-asc') arr.sort((a,b)=>new Date(a.dateAdded)-new Date(b.dateAdded));
     else if(sort==='name') arr.sort((a,b)=>a.name.localeCompare(b.name));
@@ -489,32 +517,32 @@
   }
 
   function renderGrid() {
-    let grid=document.getElementById('photoGrid');
-    grid.innerHTML='';
-    let photos=getFilteredPhotos();
-    photos.forEach(p=>{
-      let card=document.createElement('div');
-      card.className='card'+(state.selectedIds.has(p.id)?' selected':'');
-      card.draggable=true;
-      card.dataset.id=p.id;
-      card.addEventListener('click',e=>{
-        if(e.ctrlKey||e.metaKey){
+    let grid = document.getElementById('photoGrid');
+    grid.innerHTML = '';
+    let photos = getFilteredPhotos();
+    photos.forEach(p => {
+      let card = document.createElement('div');
+      card.className = 'card' + (state.selectedIds.has(p.id)?' selected':'');
+      card.draggable = true;
+      card.dataset.id = p.id;
+      card.addEventListener('click', e => {
+        if(e.ctrlKey || e.metaKey) {
           e.preventDefault();
           if(state.selectedIds.has(p.id)) state.selectedIds.delete(p.id);
           else state.selectedIds.add(p.id);
           updateSelectionUI();
           card.classList.toggle('selected');
-        }else{
+        } else {
           if(!e.target.closest('.del-btn')) openDetail(p.id);
         }
       });
-      card.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',p.id);});
-      card.addEventListener('dragover',e=>e.preventDefault());
-      card.addEventListener('drop',e=>{
+      card.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', p.id); });
+      card.addEventListener('dragover', e => e.preventDefault());
+      card.addEventListener('drop', e => {
         e.preventDefault();
-        let fromId=e.dataTransfer.getData('text/plain');
-        let toId=p.id;
-        if(fromId&&toId&&fromId!==toId) movePhotoInGrid(fromId,toId);
+        let fromId = e.dataTransfer.getData('text/plain');
+        let toId = p.id;
+        if(fromId && toId && fromId!==toId) movePhotoInGrid(fromId, toId);
       });
       let thumbHTML = p.thumbUrl ? `<img src="${p.thumbUrl}" alt="">` :
         (p.isRaw ? `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;background:#f0e9d8;"><span style="font-size:2rem;">📷</span><span style="font-size:0.7rem;">${p.rawFormat||'RAW'}</span></div>` : '<span>🦜</span>');
@@ -526,50 +554,60 @@
     });
   }
 
-  function movePhotoInGrid(fromId,toId){
-    let fromIdx=state.photos.findIndex(p=>p.id===fromId);
-    let toIdx=state.photos.findIndex(p=>p.id===toId);
-    if(fromIdx!==-1&&toIdx!==-1){
-      state.photos.splice(toIdx,0,state.photos.splice(fromIdx,1)[0]);
+  function movePhotoInGrid(fromId, toId) {
+    let fromIdx = state.photos.findIndex(p=>p.id===fromId);
+    let toIdx = state.photos.findIndex(p=>p.id===toId);
+    if(fromIdx!==-1 && toIdx!==-1) {
+      state.photos.splice(toIdx, 0, state.photos.splice(fromIdx,1)[0]);
       save(); renderGrid();
     }
   }
 
-  function updateSelectionUI(){
-    let c=state.selectedIds.size;
-    document.getElementById('multiActions').style.display=c>0?'flex':'none';
-    document.getElementById('selectedCount').textContent=`已選${c}張`;
+  function updateSelectionUI() {
+    let c = state.selectedIds.size;
+    document.getElementById('multiActions').style.display = c>0?'flex':'none';
+    document.getElementById('selectedCount').textContent = `已選${c}張`;
   }
-  window.clearSelection=()=>{state.selectedIds.clear();updateSelectionUI();renderGrid();};
-  window.batchMoveCategory=()=>{alert('批次移動需OAuth登入');};
-  window.copySelectedLinks=()=>{};
+  window.clearSelection = () => { state.selectedIds.clear(); updateSelectionUI(); renderGrid(); };
+  window.batchMoveCategory = () => { alert('批次移動需 OAuth 登入'); };
+  window.copySelectedLinks = () => {
+    let links = [];
+    state.selectedIds.forEach(id => {
+      let p = state.photos.find(ph=>ph.id===id);
+      if(p) {
+        if(p.fileRef) links.push(p.fileName);
+        else if(p.driveFileId) links.push(`https://drive.google.com/file/d/${p.driveFileId}/view`);
+      }
+    });
+    if(links.length) navigator.clipboard.writeText(links.join('\n')).then(()=>alert('已複製'));
+  };
 
-  function openDetail(id){
-    state.activePhotoId=id;
-    let p=state.photos.find(ph=>ph.id===id);
-    if(!p)return;
+  function openDetail(id) {
+    state.activePhotoId = id;
+    let p = state.photos.find(ph=>ph.id===id);
+    if(!p) return;
     document.getElementById('detailPanel').classList.remove('hidden');
-    document.getElementById('detailName').value=p.name;
-    document.getElementById('detailImg').src=p.thumbUrl||'';
-    let view=document.getElementById('originalView'), down=document.getElementById('originalDownload');
-    if(p.fileRef){
-      let url=localFileStore.get(id)?.blobUrl||URL.createObjectURL(p.fileRef);
-      view.href=url; down.href=url; down.download=p.fileName;
-    }else if(p.driveFileId && state.accessToken){
-      let url=`https://www.googleapis.com/drive/v3/files/${p.driveFileId}?alt=media&access_token=${state.accessToken}`;
-      view.href=url; down.href=url; down.download=p.fileName;
-    }else if(p.driveFileId && state.apiKey){
-      let url=`https://www.googleapis.com/drive/v3/files/${p.driveFileId}?alt=media&key=${state.apiKey}`;
-      view.href=url; down.href=url; down.download=p.fileName;
-    }else if(p.driveFileId){
-      view.href=`https://drive.google.com/file/d/${p.driveFileId}/view`;
+    document.getElementById('detailName').value = p.name;
+    document.getElementById('detailImg').src = p.thumbUrl || '';
+    let view = document.getElementById('originalView'), down = document.getElementById('originalDownload');
+    if(p.fileRef) {
+      let url = localFileStore.get(id)?.blobUrl || URL.createObjectURL(p.fileRef);
+      view.href = url; down.href = url; down.download = p.fileName;
+    } else if(p.driveFileId && state.accessToken) {
+      let url = `https://www.googleapis.com/drive/v3/files/${p.driveFileId}?alt=media&access_token=${state.accessToken}`;
+      view.href = url; down.href = url; down.download = p.fileName;
+    } else if(p.driveFileId && state.apiKey) {
+      let url = `https://www.googleapis.com/drive/v3/files/${p.driveFileId}?alt=media&key=${state.apiKey}`;
+      view.href = url; down.href = url; down.download = p.fileName;
+    } else if(p.driveFileId) {
+      view.href = `https://drive.google.com/file/d/${p.driveFileId}/view`;
     }
-    let sel=document.getElementById('detailCat');
-    sel.innerHTML='<option value="uncategorized">未分類</option>'+state.customCategories.map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
-    sel.value=p.category;
-    let exifDiv=document.getElementById('exifInfo');
-    if(p.exif){
-      let rows=[];
+    let sel = document.getElementById('detailCat');
+    sel.innerHTML = '<option value="uncategorized">未分類</option>' + state.customCategories.map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
+    sel.value = p.category;
+    let exifDiv = document.getElementById('exifInfo');
+    if(p.exif) {
+      let rows = [];
       if(p.exif.Make) rows.push(`<div class="exif-row"><span>製造商</span><span>${p.exif.Make}</span></div>`);
       if(p.exif.Model) rows.push(`<div class="exif-row"><span>相機型號</span><span>${p.exif.Model}</span></div>`);
       if(p.exif.LensModel) rows.push(`<div class="exif-row"><span>鏡頭</span><span>${p.exif.LensModel}</span></div>`);
@@ -578,113 +616,109 @@
       if(p.exif.ExposureTime!==undefined) rows.push(`<div class="exif-row"><span>快門</span><span>${formatShutterSpeed(p.exif.ExposureTime)}</span></div>`);
       if(p.exif.ISO) rows.push(`<div class="exif-row"><span>ISO</span><span>${p.exif.ISO}</span></div>`);
       if(p.exif.DateTimeOriginal||p.exif.CreateDate) rows.push(`<div class="exif-row"><span>拍攝日期</span><span>${p.exif.DateTimeOriginal||p.exif.CreateDate}</span></div>`);
-      exifDiv.innerHTML=rows.join('')||'無 EXIF 資料';
-    }else exifDiv.innerHTML='無 EXIF 資料';
+      exifDiv.innerHTML = rows.join('') || '無 EXIF 資料';
+    } else exifDiv.innerHTML = '無 EXIF 資料';
   }
 
-  window.closeDetail=()=>{document.getElementById('detailPanel').classList.add('hidden');state.activePhotoId=null;};
-  window.renamePhoto=()=>{let p=state.photos.find(ph=>ph.id===state.activePhotoId);if(p){p.name=document.getElementById('detailName').value.trim()||p.name;save();renderAll();}};
-  window.changeCategory=()=>{let p=state.photos.find(ph=>ph.id===state.activePhotoId);if(p){p.category=document.getElementById('detailCat').value;save();renderAll();}};
-  window.deletePhoto=()=>{let p=state.photos.find(ph=>ph.id===state.activePhotoId);if(p){state.photos=state.photos.filter(ph=>ph.id!==p.id);state.selectedIds.delete(p.id);closeDetail();save();renderAll();}};
-  window.deletePhotoById=(id)=>{state.photos=state.photos.filter(p=>p.id!==id);state.selectedIds.delete(id);if(state.activePhotoId===id)closeDetail();save();renderAll();};
+  window.closeDetail = () => { document.getElementById('detailPanel').classList.add('hidden'); state.activePhotoId = null; };
+  window.renamePhoto = () => { let p = state.photos.find(ph=>ph.id===state.activePhotoId); if(p) { p.name = document.getElementById('detailName').value.trim()||p.name; save(); renderAll(); }};
+  window.changeCategory = () => { let p = state.photos.find(ph=>ph.id===state.activePhotoId); if(p) { p.category = document.getElementById('detailCat').value; save(); renderAll(); }};
+  window.deletePhoto = () => { let p = state.photos.find(ph=>ph.id===state.activePhotoId); if(p) { state.photos = state.photos.filter(ph=>ph.id!==p.id); state.selectedIds.delete(p.id); closeDetail(); save(); renderAll(); }};
+  window.deletePhotoById = (id) => { state.photos = state.photos.filter(p=>p.id!==id); state.selectedIds.delete(id); if(state.activePhotoId===id) closeDetail(); save(); renderAll(); };
+  window.copyImageToClipboard = async () => { alert('功能尚未實作'); };
 
-  function renderSidebar(){
-    document.getElementById('countAll').textContent=state.photos.length;
-    document.getElementById('countUncat').textContent=state.photos.filter(p=>p.category==='uncategorized').length;
-    let customDiv=document.getElementById('customCats');
-    customDiv.innerHTML=state.customCategories.map(cat=>{
-      let cnt=state.photos.filter(p=>p.category===cat.name).length;
+  function renderSidebar() {
+    document.getElementById('countAll').textContent = state.photos.length;
+    document.getElementById('countUncat').textContent = state.photos.filter(p=>p.category==='uncategorized').length;
+    let customDiv = document.getElementById('customCats');
+    customDiv.innerHTML = state.customCategories.map(cat => {
+      let cnt = state.photos.filter(p=>p.category===cat.name).length;
       return `<div class="cat-item" data-cat="${cat.name}"><span>🐦 ${cat.name}</span><span class="count">${cnt}</span><span class="del-cat" onclick="event.stopPropagation(); deleteCategory('${cat.name}')">✕</span></div>`;
     }).join('');
-    let camDiv=document.getElementById('cameraList');
-    let cams=[...new Set(state.photos.map(p=>p.exif?.Model).filter(Boolean))];
-    state.cameraFilters.forEach(f=>{if(!cams.includes(f))cams.push(f)});
-    camDiv.innerHTML=cams.map(m=>`<div class="cat-item" data-cat="camera:${m}">📷 ${m}</div>`).join('');
-    let lensDiv=document.getElementById('lensList');
-    let lenses=[...new Set(state.photos.map(p=>p.exif?.LensModel).filter(Boolean))];
-    state.lensFilters.forEach(f=>{if(!lenses.includes(f))lenses.push(f)});
-    lensDiv.innerHTML=lenses.map(l=>`<div class="cat-item" data-cat="lens:${l}">🔭 ${l}</div>`).join('');
-    document.querySelectorAll('.sidebar .cat-item').forEach(el=>{
-      el.onclick=e=>{
-        if(e.target.closest('.del-cat'))return;
-        state.activeCat=el.dataset.cat;
+    let camDiv = document.getElementById('cameraList');
+    let cams = [...new Set(state.photos.map(p=>p.exif?.Model).filter(Boolean))];
+    state.cameraFilters.forEach(f=>{if(!cams.includes(f)) cams.push(f);});
+    camDiv.innerHTML = cams.map(m=>`<div class="cat-item" data-cat="camera:${m}">📷 ${m}</div>`).join('');
+    let lensDiv = document.getElementById('lensList');
+    let lenses = [...new Set(state.photos.map(p=>p.exif?.LensModel).filter(Boolean))];
+    state.lensFilters.forEach(f=>{if(!lenses.includes(f)) lenses.push(f);});
+    lensDiv.innerHTML = lenses.map(l=>`<div class="cat-item" data-cat="lens:${l}">🔭 ${l}</div>`).join('');
+    document.querySelectorAll('.sidebar .cat-item').forEach(el => {
+      el.onclick = e => {
+        if(e.target.closest('.del-cat')) return;
+        state.activeCat = el.dataset.cat;
         document.querySelectorAll('.cat-item').forEach(c=>c.classList.remove('active'));
         el.classList.add('active');
         renderGrid();
       };
-      el.addEventListener('dragover',e=>e.preventDefault());
-      el.addEventListener('drop',e=>{
+      el.addEventListener('dragover', e => e.preventDefault());
+      el.addEventListener('drop', e => {
         e.preventDefault();
-        let photoId=e.dataTransfer.getData('text/plain');
-        let targetCat=el.dataset.cat;
-        if(targetCat&&targetCat!=='all'&&!targetCat.startsWith('camera:')&&!targetCat.startsWith('lens:')){
-          let p=state.photos.find(ph=>ph.id===photoId);
-          if(p&&state.accessToken){ movePhotoToCategory(photoId,targetCat); }
-          else if(p){ p.category=targetCat; save(); renderAll(); }
+        let photoId = e.dataTransfer.getData('text/plain');
+        let targetCat = el.dataset.cat;
+        if(targetCat && targetCat !== 'all' && !targetCat.startsWith('camera:') && !targetCat.startsWith('lens:')) {
+          let p = state.photos.find(ph=>ph.id===photoId);
+          if(p && state.accessToken) { movePhotoToCategory(photoId, targetCat); }
+          else if(p) { p.category = targetCat; save(); renderAll(); }
         }
       });
     });
   }
 
-  async function movePhotoToCategory(photoId,targetCat){
-    let photo=state.photos.find(p=>p.id===photoId);
-    if(!photo||!state.accessToken)return;
-    let oldCat=photo.category;
-    if(oldCat===targetCat)return;
-    if(photo.driveFileId){
-      try{
-        let fromId=oldCat==='uncategorized'?await ensureRootFolder():state.customCategories.find(c=>c.name===oldCat)?.driveFolderId;
-        let toId=targetCat==='uncategorized'?await ensureRootFolder():state.customCategories.find(c=>c.name===targetCat)?.driveFolderId;
-        if(toId) await oauthDriveRequest(`https://www.googleapis.com/drive/v3/files/${photo.driveFileId}?addParents=${toId}&removeParents=${fromId||''}`, {method:'PATCH'});
-      }catch(e){alert('雲端移動失敗：'+e.message);return;}
-    }
-    photo.category=targetCat;
-    save(); renderAll();
-  }
-
-  window.deleteCategory=(name)=>{
-    state.customCategories=state.customCategories.filter(c=>c.name!==name);
-    state.photos.forEach(p=>{if(p.category===name)p.category='uncategorized';});
+  window.deleteCategory = (name) => {
+    state.customCategories = state.customCategories.filter(c=>c.name!==name);
+    state.photos.forEach(p=>{if(p.category===name) p.category='uncategorized';});
     save(); renderAll();
   };
-  window.addFilter=(type)=>{
-    let name=prompt(`輸入${type==='camera'?'相機':'鏡頭'}型號：`);
-    if(name){
-      if(type==='camera')state.cameraFilters.push(name);
+  window.addFilter = (type) => {
+    let name = prompt(`輸入要新增的${type==='camera'?'相機':'鏡頭'}型號：`);
+    if(name) {
+      if(type==='camera') state.cameraFilters.push(name);
       else state.lensFilters.push(name);
       save(); renderAll();
     }
   };
 
-  document.getElementById('dateBtn').addEventListener('click',e=>{e.stopPropagation();document.getElementById('datePopup').style.display='block';});
-  window.applyDateRange=()=>{
-    let s=document.getElementById('dateStart').value,e=document.getElementById('dateEnd').value;
-    if(s&&e)document.getElementById('searchInput').value=s+' 至 '+e;
-    else if(s)document.getElementById('searchInput').value=s;
-    else if(e)document.getElementById('searchInput').value=e;
-    document.getElementById('datePopup').style.display='none';
+  // 日期區間
+  document.getElementById('dateBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    document.getElementById('datePopup').style.display = 'block';
+  });
+  window.applyDateRange = () => {
+    let s = document.getElementById('dateStart').value, e = document.getElementById('dateEnd').value;
+    if(s&&e) document.getElementById('searchInput').value = s+' 至 '+e;
+    else if(s) document.getElementById('searchInput').value = s;
+    else if(e) document.getElementById('searchInput').value = e;
+    document.getElementById('datePopup').style.display = 'none';
     renderGrid();
   };
-  window.clearDateRange=()=>{
-    document.getElementById('dateStart').value='';document.getElementById('dateEnd').value='';
-    document.getElementById('searchInput').value='';document.getElementById('datePopup').style.display='none';
+  window.clearDateRange = () => {
+    document.getElementById('dateStart').value=''; document.getElementById('dateEnd').value='';
+    document.getElementById('searchInput').value=''; document.getElementById('datePopup').style.display='none';
     renderGrid();
   };
-  document.addEventListener('click',e=>{
-    if(!e.target.closest('.date-popup')&&!e.target.closest('.date-btn'))document.getElementById('datePopup').style.display='none';
+  document.addEventListener('click', e => {
+    if(!e.target.closest('.date-popup') && !e.target.closest('.date-btn'))
+      document.getElementById('datePopup').style.display = 'none';
   });
 
-  function renderAll(){renderSidebar();renderGrid();updateSelectionUI();}
+  function renderAll() { renderSidebar(); renderGrid(); updateSelectionUI(); }
 
-  window.addEventListener('load',()=>{
+  // 初始化
+  window.addEventListener('load', () => {
     load();
-    if(clientId)initOAuth();
+    if(clientId) initOAuth();
     updateLoginUI();
     renderAll();
-    document.getElementById('fileInput').onchange=e=>{if(e.target.files.length){handleUpload(e.target.files);e.target.value='';}};
-    document.getElementById('searchInput').oninput=renderGrid;
-    window.addEventListener('dragover',e=>e.preventDefault());
-    window.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer.files.length)handleUpload(e.dataTransfer.files);});
+    document.getElementById('fileInput').onchange = e => {
+      if(e.target.files.length) { handleUpload(e.target.files); e.target.value = ''; }
+    };
+    document.getElementById('searchInput').oninput = renderGrid;
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop', e => {
+      e.preventDefault();
+      if(e.dataTransfer.files.length) handleUpload(e.dataTransfer.files);
+    });
   });
 })();
 </script>
